@@ -1,0 +1,73 @@
+[Version]
+Signature = "$WINDOWS NT$"
+Class = HIDClass
+ClassGuid = {745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider = %Provider%
+CatalogFile = AppleStudioDisplayXDRSensorsFix.cat
+DriverVer = 07/27/2026, 1.0.0.0
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%
+
+[SourceDisksFiles]
+AppleStudioDisplayXDRSensorsFix.sys = 1
+
+[Manufacturer]
+%Provider% = Std, NTamd64.10.0...16299
+
+[Std.NTamd64.10.0...16299]
+%AmbientLightUSBSensor% = Fix, USB\VID_05AC&PID_1116&MI_08
+%AmbientLightHIDSensor% = Null, HID\VID_05AC&PID_1116&MI_08&Col01
+%AmbientLightHIDSensor% = Null, HID\VID_05AC&PID_1116&MI_08&Col02
+%OrientationHIDSensor% = Null, HID\VID_05AC&PID_1116&MI_09
+
+[Fix.NT]
+Include = input.inf
+Needs = HID_Inst.NT
+CopyFiles = Fix_CopyFiles
+
+[Fix.NT.HW]
+Include = input.inf
+Needs = HID_Inst.NT.HW
+AddReg = Fix_AddReg
+
+[Fix.NT.Services]
+Include = input.inf
+Needs = HID_Inst.NT.Services
+AddService = AppleStudioDisplayXDRSensorsFix, , Fix_Service
+
+[Fix.NT.Wdf]
+KmdfService = AppleStudioDisplayXDRSensorsFix, Fix_WdfSect
+
+[Fix_AddReg]
+HKR, , "LowerFilters", 0x00010008, "AppleStudioDisplayXDRSensorsFix"
+
+[Fix_CopyFiles]
+AppleStudioDisplayXDRSensorsFix.sys
+
+[Fix_Service]
+DisplayName = %ServiceDisplayName%
+ServiceType = 1
+StartType = 3
+ErrorControl = 1
+ServiceBinary = %13%\AppleStudioDisplayXDRSensorsFix.sys
+
+[Fix_WdfSect]
+KmdfLibraryVersion = 1.15
+
+[Null.NT]
+
+[Null.NT.Services]
+AddService = , 2
+
+[Strings]
+Provider = "Alexey Rodionov"
+DiskName = "Apple Studio Display XDR Sensors Fix Installation Disk"
+ServiceDisplayName = "Apple Studio Display XDR Sensors Fix"
+AmbientLightUSBSensor = "Apple Studio Display XDR USB Ambient Light Sensor"
+AmbientLightHIDSensor = "Apple Studio Display XDR HID Ambient Light Sensor"
+OrientationHIDSensor = "Apple Studio Display XDR HID Orientation Sensor"

@@ -1,0 +1,132 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  KIT_VERSION: 10.0.28000.1839
+  CONFIGURATION: Release
+  PLATFORM: x64
+  CERT_SUBJECT: CN=AppleStudioDisplayXDRSensorsFix Test Certificate
+  PFX_PASSWORD: testsigning
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - uses: NuGet/setup-nuget@v3
+
+      - name: Restore WDK NuGet packages
+        run: nuget restore packages.config -PackagesDirectory packages
+
+      - name: Verify WDK props were restored
+        shell: pwsh
+        run: |
+          $props = "packages\Microsoft.Windows.WDK.x64.$env:KIT_VERSION\build\native\Microsoft.Windows.WDK.x64.props"
+          if (-not (Test-Path $props)) {
+            Write-Host "Restored packages:"
+            Get-ChildItem packages -Directory -ErrorAction SilentlyContinue | ForEach-Object { "  $($_.Name)" }
+            throw "WDK props not found: $props"
+          }
+
+      - name: Build
+        run: >
+          msbuild AppleStudioDisplayXDRSensorsFix.vcxproj
+          /p:Configuration=$env:CONFIGURATION
+          /p:Platform=$env:PLATFORM
+          /p:KitVersion=$env:KIT_VERSION
+          /m
+
+      - name: Locate WDK tools
+        id: tools
+        shell: pwsh
+        run: |
+          function Find-Tool($name) {
+            $hit = Get-ChildItem -Path packages -Recurse -Filter $name -ErrorAction SilentlyContinue |
+                   Where-Object { $_.FullName -match '\\(x64|x86)\\' } |
+                   Select-Object -First 1
+            if (-not $hit) { throw "$name not found under packages\" }
+            return $hit.FullName
+          }
+          "signtool=$(Find-Tool 'signtool.exe')" >> $env:GITHUB_OUTPUT
+          "inf2cat=$(Find-Tool 'Inf2Cat.exe')"  >> $env:GITHUB_OUTPUT
+          "infverif=$(Find-Tool 'InfVerif.exe')" >> $env:GITHUB_OUTPUT
+
+      - name: Assemble driver package
+        shell: pwsh
+        run: |
+          $out = "build\$env:PLATFORM\$env:CONFIGURATION"
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item "$out\AppleStudioDisplayXDRSensorsFix.sys" package\
+          Copy-Item "$out\AppleStudioDisplayXDRSensorsFix.pdb" package\
+          Copy-Item "AppleStudioDisplayXDRSensorsFix.inf" package\
+
+      - name: Verify INF
+        shell: pwsh
+        run: |
+          & "${{ steps.tools.outputs.infverif }}" /v /w package\AppleStudioDisplayXDRSensorsFix.inf
+          if ($LASTEXITCODE -ne 0) { throw "InfVerif failed with $LASTEXITCODE" }
+
+      - name: Create self-signed test certificate
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate `
+            -Type CodeSigningCert `
+            -Subject $env:CERT_SUBJECT `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -KeyUsage DigitalSignature `
+            -KeyExportPolicy Exportable `
+            -NotAfter (Get-Date).AddYears(5) `
+            -HashAlgorithm SHA256
+          $pwd = ConvertTo-SecureString -String $env:PFX_PASSWORD -Force -AsPlainText
+          Export-PfxCertificate -Cert $cert -FilePath testcert.pfx -Password $pwd | Out-Null
+          Export-Certificate  -Cert $cert -FilePath package\testcert.cer -Type CERT | Out-Null
+
+      - name: Sign driver binary
+        shell: pwsh
+        run: |
+          & "${{ steps.tools.outputs.signtool }}" sign /fd SHA256 /f testcert.pfx /p $env:PFX_PASSWORD `
+            package\AppleStudioDisplayXDRSensorsFix.sys
+          if ($LASTEXITCODE -ne 0) { throw "signtool (sys) failed with $LASTEXITCODE" }
+
+      - name: Generate catalog
+        shell: pwsh
+        run: |
+          & "${{ steps.tools.outputs.inf2cat }}" /driver:package /os:10_X64 /uselocaltime
+          if ($LASTEXITCODE -ne 0) { throw "Inf2Cat failed with $LASTEXITCODE" }
+
+      - name: Sign catalog
+        shell: pwsh
+        run: |
+          & "${{ steps.tools.outputs.signtool }}" sign /fd SHA256 /f testcert.pfx /p $env:PFX_PASSWORD `
+            package\AppleStudioDisplayXDRSensorsFix.cat
+          if ($LASTEXITCODE -ne 0) { throw "signtool (cat) failed with $LASTEXITCODE" }
+
+      - name: Verify signatures
+        shell: pwsh
+        run: |
+          Get-ChildItem package\*.sys, package\*.cat | ForEach-Object {
+            $sig = Get-AuthenticodeSignature $_.FullName
+            "{0,-45} {1}" -f $_.Name, $sig.Status
+            if ($sig.Status -ne 'Valid' -and $sig.Status -ne 'UnknownError') {
+              throw "$($_.Name): unexpected signature status $($sig.Status)"
+            }
+          }
+
+      - name: Remove test certificate
+        if: always()
+        shell: pwsh
+        run: Remove-Item testcert.pfx -ErrorAction SilentlyContinue
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: AppleStudioDisplayXDRSensorsFix-${{ env.PLATFORM }}-${{ env.CONFIGURATION }}
+          path: package/
