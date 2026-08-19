@@ -9,15 +9,15 @@
 #endif
 
 DRIVER_INITIALIZE DriverEntry;
-EVT_WDF_DRIVER_DEVICE_ADD SensorsFixEvtDeviceAdd;
-EVT_WDF_IO_QUEUE_IO_INTERNAL_DEVICE_CONTROL SensorsFixEvtIoInternalDeviceControl;
-EVT_WDF_REQUEST_COMPLETION_ROUTINE SensorsFixDescriptorCompletion;
+EVT_WDF_DRIVER_DEVICE_ADD EvtDeviceAdd;
+EVT_WDF_IO_QUEUE_IO_INTERNAL_DEVICE_CONTROL EvtIoInternalDeviceControl;
+EVT_WDF_REQUEST_COMPLETION_ROUTINE DescriptorCompletion;
 
 static const UCHAR kBadPrefix[8] = { 0x06, 0x00, 0xFF, 0x09, 0x1A, 0xA1, 0x01, 0xC0 };
 static const UCHAR kGoodPrefix[8] = { 0x06, 0x00, 0xFF, 0x06, 0x00, 0xFF, 0x05, 0x20 };
 
 static VOID
-SensorsFixPatchReportDescriptor(_Inout_updates_bytes_(Length) PUCHAR Buffer, _In_ ULONG Length)
+PatchReportDescriptor(_Inout_updates_bytes_(Length) PUCHAR Buffer, _In_ ULONG Length)
 {
   if (Buffer == NULL || Length < sizeof(kBadPrefix)) {
     return;
@@ -25,9 +25,9 @@ SensorsFixPatchReportDescriptor(_Inout_updates_bytes_(Length) PUCHAR Buffer, _In
 
   if (RtlCompareMemory(Buffer, kBadPrefix, sizeof(kBadPrefix)) == sizeof(kBadPrefix)) {
     RtlCopyMemory(Buffer, kGoodPrefix, sizeof(kGoodPrefix));
-    DbgPrint("AppleStudioDisplayXDRSensorsFix: report descriptor patched (%lu bytes total)\n", Length);
+    DbgPrint("Apple Studio Display XDR Ambient Light USB Sensor Fix: report descriptor patched (%lu bytes total)\n", Length);
   } else {
-    DbgPrint("AppleStudioDisplayXDRSensorsFix: descriptor prefix did not match; left unmodified\n");
+    DbgPrint("Apple Studio Display XDR Ambient Light USB Sensor Fix: descriptor prefix did not match; left unmodified\n");
   }
 }
 
@@ -36,13 +36,13 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 {
   WDF_DRIVER_CONFIG config;
 
-  WDF_DRIVER_CONFIG_INIT(&config, SensorsFixEvtDeviceAdd);
+  WDF_DRIVER_CONFIG_INIT(&config, EvtDeviceAdd);
 
   return WdfDriverCreate(DriverObject, RegistryPath, WDF_NO_OBJECT_ATTRIBUTES, &config, WDF_NO_HANDLE);
 }
 
 NTSTATUS
-SensorsFixEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
+EvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit)
 {
   NTSTATUS status;
   WDFDEVICE device;
@@ -58,13 +58,13 @@ SensorsFixEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT DeviceInit
   }
 
   WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&queueConfig, WdfIoQueueDispatchParallel);
-  queueConfig.EvtIoInternalDeviceControl = SensorsFixEvtIoInternalDeviceControl;
+  queueConfig.EvtIoInternalDeviceControl = EvtIoInternalDeviceControl;
 
   return WdfIoQueueCreate(device, &queueConfig, WDF_NO_OBJECT_ATTRIBUTES, WDF_NO_HANDLE);
 }
 
 VOID
-SensorsFixEvtIoInternalDeviceControl(_In_ WDFQUEUE Queue, _In_ WDFREQUEST Request, _In_ size_t OutputBufferLength, _In_ size_t InputBufferLength, _In_ ULONG IoControlCode)
+EvtIoInternalDeviceControl(_In_ WDFQUEUE Queue, _In_ WDFREQUEST Request, _In_ size_t OutputBufferLength, _In_ size_t InputBufferLength, _In_ ULONG IoControlCode)
 {
   WDFDEVICE device = WdfIoQueueGetDevice(Queue);
   WDF_REQUEST_SEND_OPTIONS options;
@@ -93,11 +93,11 @@ SensorsFixEvtIoInternalDeviceControl(_In_ WDFQUEUE Queue, _In_ WDFREQUEST Reques
 
   if (isReportDescriptor) {
     WdfRequestFormatRequestUsingCurrentType(Request);
-    WdfRequestSetCompletionRoutine(Request, SensorsFixDescriptorCompletion, NULL);
+    WdfRequestSetCompletionRoutine(Request, DescriptorCompletion, NULL);
 
     if (!WdfRequestSend(Request, WdfDeviceGetIoTarget(device), WDF_NO_SEND_OPTIONS)) {
       status = WdfRequestGetStatus(Request);
-      DbgPrint("AppleStudioDisplayXDRSensorsFix: WdfRequestSend failed 0x%x\n", status);
+      DbgPrint("Apple Studio Display XDR Ambient Light USB Sensor Fix: WdfRequestSend failed 0x%x\n", status);
       WdfRequestComplete(Request, status);
     }
     return;
@@ -112,7 +112,7 @@ SensorsFixEvtIoInternalDeviceControl(_In_ WDFQUEUE Queue, _In_ WDFREQUEST Reques
 }
 
 VOID
-SensorsFixDescriptorCompletion(_In_ WDFREQUEST Request, _In_ WDFIOTARGET Target, _In_ PWDF_REQUEST_COMPLETION_PARAMS CompletionParams, _In_ WDFCONTEXT Context)
+DescriptorCompletion(_In_ WDFREQUEST Request, _In_ WDFIOTARGET Target, _In_ PWDF_REQUEST_COMPLETION_PARAMS CompletionParams, _In_ WDFCONTEXT Context)
 {
   NTSTATUS status = CompletionParams->IoStatus.Status;
   WDF_REQUEST_PARAMETERS params;
@@ -139,7 +139,7 @@ SensorsFixDescriptorCompletion(_In_ WDFREQUEST Request, _In_ WDFIOTARGET Target,
           buffer = (PUCHAR)MmGetSystemAddressForMdlSafe(desc->TransferBufferMDL, NormalPagePriority | MdlMappingNoExecute);
         }
 
-        SensorsFixPatchReportDescriptor(buffer, length);
+        PatchReportDescriptor(buffer, length);
       }
     }
   }

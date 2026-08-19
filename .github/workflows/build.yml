@@ -10,7 +10,13 @@ env:
   KIT_VERSION: 10.0.28000.1839
   CONFIGURATION: Release
   PLATFORM: x64
-  CERT_SUBJECT: CN=AppleStudioDisplayXDRSensorsFix Test Certificate
+  PROJECT: AppleStudioDisplayXDRSensorsFix
+  FIX_NAME: AppleStudioDisplayXDRAmbientLightUSBSensorFix
+  NULL_NAME: AppleStudioDisplayXDRAmbientLightOrientationHIDSensorsNull
+  PKG_ROOT: package
+  FIX_PKG: package\AppleStudioDisplayXDRAmbientLightUSBSensorFix
+  NULL_PKG: package\AppleStudioDisplayXDRAmbientLightOrientationHIDSensorsNull
+  CERT_SUBJECT: CN=Apple Studio Display XDR Sensors Fix Test Certificate
   PFX_PASSWORD: testsigning
 
 jobs:
@@ -38,12 +44,14 @@ jobs:
           }
 
       - name: Build
-        run: >
-          msbuild AppleStudioDisplayXDRSensorsFix.vcxproj
-          /p:Configuration=$env:CONFIGURATION
-          /p:Platform=$env:PLATFORM
-          /p:KitVersion=$env:KIT_VERSION
-          /m
+        shell: pwsh
+        run: |
+          msbuild "${env:PROJECT}.vcxproj" `
+            /p:Configuration=$env:CONFIGURATION `
+            /p:Platform=$env:PLATFORM `
+            /p:KitVersion=$env:KIT_VERSION `
+            /m
+          if ($LASTEXITCODE -ne 0) { throw "msbuild failed with $LASTEXITCODE" }
 
       - name: Locate WDK tools
         id: tools
@@ -60,20 +68,27 @@ jobs:
           "inf2cat=$(Find-Tool 'Inf2Cat.exe')"  >> $env:GITHUB_OUTPUT
           "infverif=$(Find-Tool 'InfVerif.exe')" >> $env:GITHUB_OUTPUT
 
-      - name: Assemble driver package
+      - name: Assemble driver packages
         shell: pwsh
         run: |
           $out = "build\$env:PLATFORM\$env:CONFIGURATION"
-          New-Item -ItemType Directory -Force -Path package | Out-Null
-          Copy-Item "$out\AppleStudioDisplayXDRSensorsFix.sys" package\
-          Copy-Item "$out\AppleStudioDisplayXDRSensorsFix.pdb" package\
-          Copy-Item "AppleStudioDisplayXDRSensorsFix.inf" package\
+          New-Item -ItemType Directory -Force -Path $env:FIX_PKG, $env:NULL_PKG | Out-Null
+          Copy-Item "$out\${env:FIX_NAME}.sys" -Destination $env:FIX_PKG
+          Copy-Item "$out\${env:FIX_NAME}.pdb" -Destination $env:FIX_PKG
+          Copy-Item "${env:FIX_NAME}.inf"       -Destination $env:FIX_PKG
+          Copy-Item "${env:NULL_NAME}.inf"      -Destination $env:NULL_PKG
 
-      - name: Verify INF
+      - name: Verify INFs
         shell: pwsh
         run: |
-          & "${{ steps.tools.outputs.infverif }}" /v /w package\AppleStudioDisplayXDRSensorsFix.inf
-          if ($LASTEXITCODE -ne 0) { throw "InfVerif failed with $LASTEXITCODE" }
+          $infs = @(
+            "$env:FIX_PKG\${env:FIX_NAME}.inf",
+            "$env:NULL_PKG\${env:NULL_NAME}.inf"
+          )
+          foreach ($inf in $infs) {
+            & "${{ steps.tools.outputs.infverif }}" /v /w $inf
+            if ($LASTEXITCODE -ne 0) { throw "InfVerif failed on $inf with $LASTEXITCODE" }
+          }
 
       - name: Create self-signed test certificate
         shell: pwsh
@@ -88,34 +103,41 @@ jobs:
             -HashAlgorithm SHA256
           $pwd = ConvertTo-SecureString -String $env:PFX_PASSWORD -Force -AsPlainText
           Export-PfxCertificate -Cert $cert -FilePath testcert.pfx -Password $pwd | Out-Null
-          Export-Certificate  -Cert $cert -FilePath package\testcert.cer -Type CERT | Out-Null
+          Export-Certificate -Cert $cert -FilePath "$env:PKG_ROOT\testcert.cer" -Type CERT | Out-Null
 
       - name: Sign driver binary
         shell: pwsh
         run: |
           & "${{ steps.tools.outputs.signtool }}" sign /fd SHA256 /f testcert.pfx /p $env:PFX_PASSWORD `
-            package\AppleStudioDisplayXDRSensorsFix.sys
+            "$env:FIX_PKG\${env:FIX_NAME}.sys"
           if ($LASTEXITCODE -ne 0) { throw "signtool (sys) failed with $LASTEXITCODE" }
 
-      - name: Generate catalog
+      - name: Generate catalogs
         shell: pwsh
         run: |
-          & "${{ steps.tools.outputs.inf2cat }}" /driver:package /os:10_X64 /uselocaltime
-          if ($LASTEXITCODE -ne 0) { throw "Inf2Cat failed with $LASTEXITCODE" }
+          foreach ($pkg in $env:FIX_PKG, $env:NULL_PKG) {
+            & "${{ steps.tools.outputs.inf2cat }}" "/driver:$pkg" /os:10_X64 /uselocaltime
+            if ($LASTEXITCODE -ne 0) { throw "Inf2Cat failed on $pkg with $LASTEXITCODE" }
+          }
 
-      - name: Sign catalog
+      - name: Sign catalogs
         shell: pwsh
         run: |
-          & "${{ steps.tools.outputs.signtool }}" sign /fd SHA256 /f testcert.pfx /p $env:PFX_PASSWORD `
-            package\AppleStudioDisplayXDRSensorsFix.cat
-          if ($LASTEXITCODE -ne 0) { throw "signtool (cat) failed with $LASTEXITCODE" }
+          $cats = @(
+            "$env:FIX_PKG\${env:FIX_NAME}.cat",
+            "$env:NULL_PKG\${env:NULL_NAME}.cat"
+          )
+          foreach ($cat in $cats) {
+            & "${{ steps.tools.outputs.signtool }}" sign /fd SHA256 /f testcert.pfx /p $env:PFX_PASSWORD $cat
+            if ($LASTEXITCODE -ne 0) { throw "signtool ($cat) failed with $LASTEXITCODE" }
+          }
 
       - name: Verify signatures
         shell: pwsh
         run: |
-          Get-ChildItem package\*.sys, package\*.cat | ForEach-Object {
+          Get-ChildItem "$env:FIX_PKG\*.sys", "$env:FIX_PKG\*.cat", "$env:NULL_PKG\*.cat" | ForEach-Object {
             $sig = Get-AuthenticodeSignature $_.FullName
-            "{0,-45} {1}" -f $_.Name, $sig.Status
+            "{0,-62} {1}" -f $_.Name, $sig.Status
             if ($sig.Status -ne 'Valid' -and $sig.Status -ne 'UnknownError') {
               throw "$($_.Name): unexpected signature status $($sig.Status)"
             }
@@ -128,5 +150,5 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: AppleStudioDisplayXDRSensorsFix-${{ env.PLATFORM }}-${{ env.CONFIGURATION }}
+          name: ${{ env.PROJECT }}-${{ env.PLATFORM }}-${{ env.CONFIGURATION }}
           path: package/
