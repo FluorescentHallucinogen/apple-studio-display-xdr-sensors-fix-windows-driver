@@ -14,8 +14,9 @@ env:
   FIX_NAME: AppleStudioDisplayXDRAmbientLightUSBSensorFix
   NULL_NAME: AppleStudioDisplayXDRAmbientLightOrientationHIDSensorsNull
   PKG_ROOT: package
-  FIX_PKG: package\AppleStudioDisplayXDRAmbientLightUSBSensorFix
-  NULL_PKG: package\AppleStudioDisplayXDRAmbientLightOrientationHIDSensorsNull
+  STAGE_ROOT: stage
+  FIX_PKG: stage\AppleStudioDisplayXDRAmbientLightUSBSensorFix
+  NULL_PKG: stage\AppleStudioDisplayXDRAmbientLightOrientationHIDSensorsNull
   CERT_SUBJECT: CN=Apple Studio Display XDR Sensors Fix Test Certificate
   PFX_PASSWORD: testsigning
 
@@ -26,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: microsoft/setup-msbuild@v2
+      - uses: microsoft/setup-msbuild@v3
 
       - uses: NuGet/setup-nuget@v3
 
@@ -72,11 +73,11 @@ jobs:
         shell: pwsh
         run: |
           $out = "build\$env:PLATFORM\$env:CONFIGURATION"
-          New-Item -ItemType Directory -Force -Path $env:FIX_PKG, $env:NULL_PKG | Out-Null
+          New-Item -ItemType Directory -Force -Path $env:PKG_ROOT, $env:FIX_PKG, $env:NULL_PKG | Out-Null
           Copy-Item "$out\${env:FIX_NAME}.sys" -Destination $env:FIX_PKG
           Copy-Item "$out\${env:FIX_NAME}.pdb" -Destination $env:FIX_PKG
-          Copy-Item "${env:FIX_NAME}.inf"       -Destination $env:FIX_PKG
-          Copy-Item "${env:NULL_NAME}.inf"      -Destination $env:NULL_PKG
+          Copy-Item "${env:FIX_NAME}.inf" -Destination $env:FIX_PKG
+          Copy-Item "${env:NULL_NAME}.inf" -Destination $env:NULL_PKG
 
       - name: Verify INFs
         shell: pwsh
@@ -142,6 +143,13 @@ jobs:
               throw "$($_.Name): unexpected signature status $($sig.Status)"
             }
           }
+
+      - name: Lay out artifact
+        shell: pwsh
+        run: |
+          Copy-Item "$env:FIX_PKG\*", "$env:NULL_PKG\*" -Destination $env:PKG_ROOT -Force
+          Copy-Item install.bat -Destination $env:PKG_ROOT -Force
+          Get-ChildItem $env:PKG_ROOT | Select-Object -ExpandProperty Name
 
       - name: Remove test certificate
         if: always()
