@@ -11,13 +11,17 @@ env:
   CONFIGURATION: Release
   PLATFORM: x64
   PROJECT: AppleStudioDisplayXDRSensorsFix
-  FIX_NAME: AppleStudioDisplayXDRAmbientLightUSBSensorFix
-  NULL_NAME: AppleStudioDisplayXDRAmbientLightOrientationHIDSensorsNull
+  NULL_NAME: AppleStudioDisplayAmbientLightOrientationHIDSensorsNull
+  XDR_FIX_NAME: AppleStudioDisplayXDRAmbientLightUSBSensorFix
+  XDR_NULL_NAME: AppleStudioDisplayXDRAmbientLightOrientationHIDSensorsNull
   PKG_ROOT: package
   STAGE_ROOT: stage
-  FIX_PKG: stage\AppleStudioDisplayXDRAmbientLightUSBSensorFix
-  NULL_PKG: stage\AppleStudioDisplayXDRAmbientLightOrientationHIDSensorsNull
-  CERT_SUBJECT: CN=Apple Studio Display XDR Sensors Fix Test Certificate
+  NULL_PKG: stage\AppleStudioDisplayAmbientLightOrientationHIDSensorsNull
+  XDR_FIX_PKG: stage\AppleStudioDisplayXDRAmbientLightUSBSensorFix
+  XDR_NULL_PKG: stage\AppleStudioDisplayXDRAmbientLightOrientationHIDSensorsNull
+  INSTALL_SCRIPT: InstallAppleStudioDisplaySensorsDrivers.bat
+  XDR_INSTALL_SCRIPT: InstallAppleStudioDisplayXDRSensorsDrivers.bat
+  CERT_SUBJECT: CN=Apple Studio Display (2026) and Apple Studio Display XDR (2026) Sensors Fix Test Certificate
   PFX_PASSWORD: testsigning
 
 jobs:
@@ -73,22 +77,19 @@ jobs:
         shell: pwsh
         run: |
           $out = "build\$env:PLATFORM\$env:CONFIGURATION"
-          New-Item -ItemType Directory -Force -Path $env:PKG_ROOT, $env:FIX_PKG, $env:NULL_PKG | Out-Null
-          Copy-Item "$out\${env:FIX_NAME}.sys" -Destination $env:FIX_PKG
-          Copy-Item "$out\${env:FIX_NAME}.pdb" -Destination $env:FIX_PKG
-          Copy-Item "${env:FIX_NAME}.inf" -Destination $env:FIX_PKG
+          New-Item -ItemType Directory -Force -Path $env:PKG_ROOT, $env:NULL_PKG, $env:XDR_FIX_PKG, $env:XDR_NULL_PKG | Out-Null
           Copy-Item "${env:NULL_NAME}.inf" -Destination $env:NULL_PKG
+          Copy-Item "$out\${env:XDR_FIX_NAME}.sys" -Destination $env:XDR_FIX_PKG
+          Copy-Item "$out\${env:XDR_FIX_NAME}.pdb" -Destination $env:XDR_FIX_PKG
+          Copy-Item "${env:XDR_FIX_NAME}.inf" -Destination $env:XDR_FIX_PKG
+          Copy-Item "${env:XDR_NULL_NAME}.inf" -Destination $env:XDR_NULL_PKG
 
       - name: Verify INFs
         shell: pwsh
         run: |
-          $infs = @(
-            "$env:FIX_PKG\${env:FIX_NAME}.inf",
-            "$env:NULL_PKG\${env:NULL_NAME}.inf"
-          )
-          foreach ($inf in $infs) {
-            & "${{ steps.tools.outputs.infverif }}" /v /w $inf
-            if ($LASTEXITCODE -ne 0) { throw "InfVerif failed on $inf with $LASTEXITCODE" }
+          foreach ($inf in Get-ChildItem "$env:STAGE_ROOT\*\*.inf") {
+            & "${{ steps.tools.outputs.infverif }}" /v /w $inf.FullName
+            if ($LASTEXITCODE -ne 0) { throw "InfVerif failed on $($inf.Name) with $LASTEXITCODE" }
           }
 
       - name: Create self-signed test certificate
@@ -110,33 +111,30 @@ jobs:
         shell: pwsh
         run: |
           & "${{ steps.tools.outputs.signtool }}" sign /fd SHA256 /f testcert.pfx /p $env:PFX_PASSWORD `
-            "$env:FIX_PKG\${env:FIX_NAME}.sys"
+            "$env:XDR_FIX_PKG\${env:XDR_FIX_NAME}.sys"
           if ($LASTEXITCODE -ne 0) { throw "signtool (sys) failed with $LASTEXITCODE" }
 
       - name: Generate catalogs
         shell: pwsh
         run: |
-          foreach ($pkg in $env:FIX_PKG, $env:NULL_PKG) {
-            & "${{ steps.tools.outputs.inf2cat }}" "/driver:$pkg" /os:10_X64 /uselocaltime
-            if ($LASTEXITCODE -ne 0) { throw "Inf2Cat failed on $pkg with $LASTEXITCODE" }
+          foreach ($pkg in Get-ChildItem $env:STAGE_ROOT -Directory) {
+            & "${{ steps.tools.outputs.inf2cat }}" "/driver:$($pkg.FullName)" /os:10_X64 /uselocaltime
+            if ($LASTEXITCODE -ne 0) { throw "Inf2Cat failed on $($pkg.Name) with $LASTEXITCODE" }
+            if (-not (Get-ChildItem "$($pkg.FullName)\*.cat")) { throw "Inf2Cat produced no catalog in $($pkg.Name)" }
           }
 
       - name: Sign catalogs
         shell: pwsh
         run: |
-          $cats = @(
-            "$env:FIX_PKG\${env:FIX_NAME}.cat",
-            "$env:NULL_PKG\${env:NULL_NAME}.cat"
-          )
-          foreach ($cat in $cats) {
-            & "${{ steps.tools.outputs.signtool }}" sign /fd SHA256 /f testcert.pfx /p $env:PFX_PASSWORD $cat
-            if ($LASTEXITCODE -ne 0) { throw "signtool ($cat) failed with $LASTEXITCODE" }
+          foreach ($cat in Get-ChildItem "$env:STAGE_ROOT\*\*.cat") {
+            & "${{ steps.tools.outputs.signtool }}" sign /fd SHA256 /f testcert.pfx /p $env:PFX_PASSWORD $cat.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signtool ($($cat.Name)) failed with $LASTEXITCODE" }
           }
 
       - name: Verify signatures
         shell: pwsh
         run: |
-          Get-ChildItem "$env:FIX_PKG\*.sys", "$env:FIX_PKG\*.cat", "$env:NULL_PKG\*.cat" | ForEach-Object {
+          Get-ChildItem "$env:STAGE_ROOT\*\*.sys", "$env:STAGE_ROOT\*\*.cat" | ForEach-Object {
             $sig = Get-AuthenticodeSignature $_.FullName
             "{0,-62} {1}" -f $_.Name, $sig.Status
             if ($sig.Status -ne 'Valid' -and $sig.Status -ne 'UnknownError') {
@@ -147,8 +145,8 @@ jobs:
       - name: Lay out artifact
         shell: pwsh
         run: |
-          Copy-Item "$env:FIX_PKG\*", "$env:NULL_PKG\*" -Destination $env:PKG_ROOT -Force
-          Copy-Item install.bat -Destination $env:PKG_ROOT -Force
+          Copy-Item "$env:STAGE_ROOT\*\*" -Destination $env:PKG_ROOT -Force
+          Copy-Item $env:INSTALL_SCRIPT, $env:XDR_INSTALL_SCRIPT -Destination $env:PKG_ROOT -Force
           Get-ChildItem $env:PKG_ROOT | Select-Object -ExpandProperty Name
 
       - name: Remove test certificate
